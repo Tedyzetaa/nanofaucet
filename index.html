@@ -6,7 +6,7 @@
 <title>NANOFAUCET :: micro-resgates de cripto</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+<script src="https://js.hcaptcha.com/1/api.js?onload=onHCaptchaLoad&render=explicit" async defer></script>
 <style>
   :root{
     --bg:#05070a;
@@ -178,9 +178,65 @@
 
   footer{margin-top:50px;border-top:1px solid var(--line);padding-top:18px;font-size:11px;color:var(--text-dim);
     display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+
+  /* entry gates: human verification + adblock detection */
+  .gate-overlay{
+    position:fixed;inset:0;z-index:50;background:rgba(5,7,10,.97);
+    display:flex;align-items:center;justify-content:center;padding:20px;
+    font-family:var(--mono-body);
+  }
+  .gate-box{
+    max-width:420px;width:100%;border:1px solid var(--line);background:var(--bg-panel);
+    border-radius:8px;padding:32px 26px;text-align:center;
+  }
+  .gate-title{
+    font-family:var(--mono-display);font-weight:800;letter-spacing:.1em;
+    color:var(--green);font-size:14px;margin-bottom:12px;text-transform:uppercase;
+  }
+  .gate-sub{font-size:12.5px;color:var(--text-dim);line-height:1.65;margin-bottom:4px;}
+  .gate-captcha{display:flex;justify-content:center;margin:20px 0;min-height:76px;}
+  .gate-btn{
+    width:100%;background:var(--green);color:#03110a;border:none;border-radius:6px;
+    padding:13px;font-family:var(--mono-display);font-weight:800;font-size:12px;
+    letter-spacing:.08em;cursor:pointer;text-transform:uppercase;margin-top:6px;
+    transition:box-shadow .15s;
+  }
+  .gate-btn:hover:not(:disabled){box-shadow:0 0 20px rgba(0,255,156,.3);}
+  .gate-btn:disabled{background:#1a2b23;color:var(--text-dim);cursor:not-allowed;}
+  .gate-msg{margin-top:12px;font-size:11px;color:var(--amber);min-height:14px;}
+  .gate-msg.err{color:var(--red);}
+  #adblockGate .gate-title{color:var(--red);}
+  #adblockGate .gate-box{border-color:rgba(255,56,96,.3);}
+  #adblockGate .gate-icon{font-size:26px;margin-bottom:10px;}
+  .gate-spin{
+    display:inline-block;width:10px;height:10px;border-radius:50%;
+    background:var(--amber);animation:pulse 1s infinite;margin-right:6px;
+  }
 </style>
 </head>
 <body>
+
+<!-- GATE 1: verificação humana de entrada (independente do captcha de resgate) -->
+<div class="gate-overlay" id="humanGate">
+  <div class="gate-box">
+    <div class="gate-title">verificação_humana</div>
+    <p class="gate-sub">Antes de acessar o NANOFAUCET, confirme que você não é um robô.</p>
+    <div class="gate-captcha"><div id="entryCaptcha"></div></div>
+    <button class="gate-btn" id="humanGateBtn" disabled>Continuar</button>
+    <div class="gate-msg" id="humanGateMsg"><span class="gate-spin"></span>carregando verificação...</div>
+  </div>
+</div>
+
+<!-- GATE 2: detecção rigorosa de adblock -->
+<div class="gate-overlay" id="adblockGate" style="display:none;">
+  <div class="gate-box">
+    <div class="gate-icon">⛔</div>
+    <div class="gate-title">bloqueador de anúncios detectado</div>
+    <p class="gate-sub">O NANOFAUCET é mantido pelos anúncios exibidos na página. Desative o AdBlock (ou adicione este site à lista de exceções) para continuar.</p>
+    <button class="gate-btn" id="adblockRecheckBtn">Já desativei — verificar novamente</button>
+    <div class="gate-msg" id="adblockMsg"></div>
+  </div>
+</div>
 
 <canvas id="rain"></canvas>
 <div class="scanline"></div>
@@ -226,7 +282,7 @@
       <label for="wallet">Endereço FaucetPay / e-mail</label>
       <input type="text" id="wallet" placeholder="seuemail@dominio.com ou 0x...">
 
-      <div class="h-captcha" data-sitekey="89942b5a-b980-4b32-8604-8ec6d89e6118" data-theme="dark" style="margin-bottom:16px;"></div>
+      <div id="claimCaptcha" style="margin-bottom:16px;"></div>
 
       <button class="claim" id="claimBtn">Resgatar recompensa</button>
       <div class="timer" id="timer"></div>
@@ -326,10 +382,12 @@ setInterval(drawRain, 45);
 // ---------- boot sequence ----------
 const bootLines = [
   "[ 0.00 ] booting nanofaucet-core v1.0.0",
-  "[ 0.14 ] loading anti-fraud modules ......... OK",
-  "[ 0.31 ] checking payout gateway (FaucetPay) . OK",
-  "[ 0.52 ] verifying DDoS shield (Cloudflare) .. OK",
-  "[ 0.77 ] mounting captcha layer .............. OK",
+  "[ 0.10 ] human verification ................. PASS",
+  "[ 0.18 ] ad-block scan ....................... CLEAR",
+  "[ 0.31 ] loading anti-fraud modules ......... OK",
+  "[ 0.45 ] checking payout gateway (FaucetPay) . OK",
+  "[ 0.62 ] verifying DDoS shield (Cloudflare) .. OK",
+  "[ 0.80 ] mounting captcha layer .............. OK",
   "[ 0.95 ] all systems nominal.",
   "",
   "> iniciando interface"
@@ -349,7 +407,8 @@ function typeBoot(){
     }, 500);
   }
 }
-setTimeout(typeBoot, 200);
+// obs: typeBoot só é disparado depois que os gates de verificação (humano + adblock)
+// forem concluídos com sucesso — ver proceedToBoot() mais abaixo.
 
 // ---------- claim logic ----------
 const API_BASE = (window.location.protocol === 'file:' || ['localhost','127.0.0.1'].includes(window.location.hostname))
@@ -390,7 +449,7 @@ btn.addEventListener('click', async ()=>{
   const wallet = document.getElementById('wallet').value.trim().toLowerCase();
   if(!wallet){ log('informe seu endereço/e-mail FaucetPay', 'err'); return; }
 
-  const captchaToken = window.hcaptcha ? hcaptcha.getResponse() : '';
+  const captchaToken = (window.hcaptcha && claimWidgetID !== null) ? hcaptcha.getResponse(claimWidgetID) : '';
   if(!captchaToken){ log('complete a verificação anti-bot', 'err'); return; }
 
   btn.disabled = true;
@@ -417,7 +476,7 @@ btn.addEventListener('click', async ()=>{
       : 'não foi possível conectar ao servidor. tente novamente em instantes.', 'err');
     btn.disabled = false;
   }finally{
-    if(window.hcaptcha) hcaptcha.reset();
+    if(window.hcaptcha && claimWidgetID !== null) hcaptcha.reset(claimWidgetID);
   }
 });
 
@@ -432,6 +491,175 @@ async function loadStats(){
   }catch(e){ /* backend offline, keep zeros */ }
 }
 setTimeout(loadStats, 1500);
+
+// ============================================================
+// GATE 1 — verificação humana de entrada (hCaptcha independente
+// do captcha usado para resgatar a moeda)
+// ============================================================
+let entryWidgetID = null;
+let claimWidgetID = null;
+
+const humanGateEl  = document.getElementById('humanGate');
+const humanGateBtn = document.getElementById('humanGateBtn');
+const humanGateMsg = document.getElementById('humanGateMsg');
+
+// chamado pelo próprio script do hCaptcha (?onload=onHCaptchaLoad&render=explicit)
+function onHCaptchaLoad(){
+  entryWidgetID = hcaptcha.render('entryCaptcha', {
+    sitekey: '89942b5a-b980-4b32-8604-8ec6d89e6118',
+    theme: 'dark',
+    callback: function(){
+      humanGateBtn.disabled = false;
+      humanGateMsg.textContent = '';
+      humanGateMsg.className = 'gate-msg';
+    },
+    'expired-callback': function(){ humanGateBtn.disabled = true; },
+    'error-callback': function(){
+      humanGateMsg.textContent = 'falha ao validar. recarregue a página.';
+      humanGateMsg.className = 'gate-msg err';
+    }
+  });
+
+  claimWidgetID = hcaptcha.render('claimCaptcha', {
+    sitekey: '89942b5a-b980-4b32-8604-8ec6d89e6118',
+    theme: 'dark'
+  });
+
+  humanGateMsg.textContent = '';
+}
+
+// fallback: se o script do hCaptcha não carregar (rede lenta, bloqueio, etc.)
+setTimeout(function(){
+  if(entryWidgetID === null){
+    humanGateMsg.textContent = 'não foi possível carregar a verificação. recarregue a página.';
+    humanGateMsg.className = 'gate-msg err';
+  }
+}, 10000);
+
+humanGateBtn.addEventListener('click', function(){
+  const token = (window.hcaptcha && entryWidgetID !== null) ? hcaptcha.getResponse(entryWidgetID) : '';
+  if(!token){
+    humanGateMsg.textContent = 'complete a verificação para continuar.';
+    humanGateMsg.className = 'gate-msg err';
+    return;
+  }
+  humanGateEl.style.display = 'none';
+  runAdblockGate();
+});
+
+// ============================================================
+// GATE 2 — detecção rigorosa de adblock (múltiplos métodos)
+// ============================================================
+const adblockGateEl     = document.getElementById('adblockGate');
+const adblockMsg        = document.getElementById('adblockMsg');
+const adblockRecheckBtn = document.getElementById('adblockRecheckBtn');
+let adblockPollTimer = null;
+
+// método 1: elemento-isca com classes tipicamente alvo de filtros cosméticos
+function baitCheck(){
+  return new Promise(function(resolve){
+    const bait = document.createElement('div');
+    bait.className = 'adsbox ad-banner ad-placement adsbygoogle ad-unit textads banner_ad ad-container ads-banner pub_300x250';
+    bait.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:2px;height:2px;';
+    bait.innerHTML = '&nbsp;';
+    document.body.appendChild(bait);
+    setTimeout(function(){
+      const cs = window.getComputedStyle(bait);
+      const blocked = bait.offsetParent === null || bait.offsetHeight === 0 || bait.offsetWidth === 0
+        || cs.display === 'none' || cs.visibility === 'hidden';
+      bait.remove();
+      resolve(blocked);
+    }, 150);
+  });
+}
+
+// método 2: os próprios slots de anúncio da página (A-Ads / Adsterra) ficaram
+// escondidos/colapsados pelo bloqueador?
+function adSlotCheck(){
+  return new Promise(function(resolve){
+    setTimeout(function(){
+      const slots = document.querySelectorAll('.adslot');
+      let blocked = 0, total = 0;
+      slots.forEach(function(el){
+        total++;
+        const cs = window.getComputedStyle(el);
+        if(el.offsetHeight === 0 || cs.display === 'none' || cs.visibility === 'hidden'){
+          blocked++;
+        }
+      });
+      resolve(total > 0 && blocked > 0);
+    }, 1000);
+  });
+}
+
+// método 3: tentativa de requisição a domínios conhecidos de veiculação de anúncios
+function networkCheck(){
+  const urls = [
+    'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js',
+    'https://www3.doubleclick.net/adx/ping',
+    'https://www.highperformanceformat.com/8fbbe340e90ba3e666e007c3eb3db23b/invoke.js'
+  ];
+  return Promise.all(urls.map(function(url){
+    return fetch(url, { mode:'no-cors', cache:'no-store' })
+      .then(function(){ return false; })
+      .catch(function(){ return true; });
+  })).then(function(results){
+    return results.filter(Boolean).length >= 2; // pelo menos 2 dos 3 bloqueados
+  });
+}
+
+async function detectAdblock(){
+  try{
+    const [bait, slots, network] = await Promise.all([baitCheck(), adSlotCheck(), networkCheck()]);
+    return bait || slots || network;
+  }catch(e){
+    return false;
+  }
+}
+
+function showAdblockGate(){
+  adblockGateEl.style.display = 'flex';
+  adblockMsg.textContent = '';
+  adblockMsg.className = 'gate-msg';
+  if(!adblockPollTimer){
+    adblockPollTimer = setInterval(async function(){
+      const stillBlocked = await detectAdblock();
+      if(!stillBlocked){
+        clearInterval(adblockPollTimer);
+        adblockPollTimer = null;
+        adblockGateEl.style.display = 'none';
+        proceedToBoot();
+      }
+    }, 4000);
+  }
+}
+
+async function runAdblockGate(){
+  const blocked = await detectAdblock();
+  if(blocked){
+    showAdblockGate();
+  } else {
+    proceedToBoot();
+  }
+}
+
+adblockRecheckBtn.addEventListener('click', async function(){
+  adblockMsg.textContent = 'verificando...';
+  adblockMsg.className = 'gate-msg';
+  const stillBlocked = await detectAdblock();
+  if(stillBlocked){
+    adblockMsg.textContent = 'ainda detectado. desative o bloqueador e tente novamente.';
+    adblockMsg.className = 'gate-msg err';
+  } else {
+    if(adblockPollTimer){ clearInterval(adblockPollTimer); adblockPollTimer = null; }
+    adblockGateEl.style.display = 'none';
+    proceedToBoot();
+  }
+});
+
+function proceedToBoot(){
+  setTimeout(typeBoot, 200);
+}
 </script>
 
 <!-- BEGIN AADS AD UNIT 2452079 -->
@@ -453,6 +681,38 @@ setTimeout(loadStats, 1500);
     </style>
     </div></div>
 <!-- END AADS AD UNIT 2452079 -->
+
+<!-- BEGIN AADS AD UNIT 2452080 -->
+
+<div style="position: absolute; z-index: 99999">
+      <input autocomplete="off" type="checkbox" id="aadsstickymssdxuft" hidden />
+      <div style="padding-top: auto; padding-bottom: 0;">
+        <div style="width:100%;height:auto;position:fixed;text-align:center;font-size:0;top:0;left:0;right:0;margin:auto">
+          <label for="aadsstickymssdxuft" style="top: 50%;transform: translateY(-50%);right:24px;; position: absolute;border-radius: 4px; background: rgba(248, 248, 249, 0.70); padding: 4px;z-index: 99999;cursor:pointer">
+            <svg fill="#000000" height="16px" width="16px" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 490 490">
+              <polygon points="456.851,0 245,212.564 33.149,0 0.708,32.337 212.669,245.004 0.708,457.678 33.149,490 245,277.443 456.851,490 489.292,457.678 277.331,245.004 489.292,32.337 "/>
+            </svg>
+          </label>
+          <div id="frame" style="width: 100%;margin: auto;position: relative; z-index: 99998;">
+                      <iframe data-aa=2452080 src=//acceptable.a-ads.com/2452080/?size=Adaptive style='border:0; padding:0; width:70%; height:auto; overflow:hidden; margin: auto'></iframe>
+                      <div style="width: 70%;margin:auto;text-align: left;position: absolute;left: 0;right: 0">
+                        <a style="display:inline-block;font-size: 13px;color: #263238;padding: 4px 10px;background: #F8F8F9;text-decoration: none; border-radius: 0 0 4px 4px;"
+                          id="frame-link"
+                          target="_blank"
+                          href="https://aads.com/campaigns/new?source_id=2452080&source_type=ad_unit&partner=2452080">
+                          Advertise here
+                        </a>
+                      </div>
+                  </div>
+        </div>
+        <style>
+      #aadsstickymssdxuft:checked + div {
+        display: none;
+      }
+    </style>
+    </div></div>
+
+<!-- END AADS AD UNIT 2452080 -->
 
 </body>
 </html>
