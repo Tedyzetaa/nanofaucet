@@ -592,12 +592,14 @@ function adSlotCheck(){
   });
 }
 
-// método 3: tentativa de requisição a domínios conhecidos de veiculação de anúncios
+// método 3: tentativa de requisição aos domínios de anúncio que a própria
+// página já usa (precisam estar liberados em connect-src no CSP — ver
+// vercel.json — senão o teste dá falso positivo por causa do CSP, não do adblock)
 function networkCheck(){
   const urls = [
-    'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js',
-    'https://www3.doubleclick.net/adx/ping',
-    'https://www.highperformanceformat.com/8fbbe340e90ba3e666e007c3eb3db23b/invoke.js'
+    'https://acceptable.a-ads.com/2451633/?size=Adaptive',
+    'https://www.highperformanceformat.com/8fbbe340e90ba3e666e007c3eb3db23b/invoke.js',
+    'https://pl30838569.effectivecpmnetwork.com/0b3781410e7c4978346d5b510f99492b/invoke.js'
   ];
   return Promise.all(urls.map(function(url){
     return fetch(url, { mode:'no-cors', cache:'no-store' })
@@ -611,7 +613,10 @@ function networkCheck(){
 async function detectAdblock(){
   try{
     const [bait, slots, network] = await Promise.all([baitCheck(), adSlotCheck(), networkCheck()]);
-    return bait || slots || network;
+    // exige que pelo menos 2 dos 3 métodos concordem — reduz falso positivo
+    // mantendo a checagem rigorosa (um único sinal isolado não derruba o acesso)
+    const signals = [bait, slots, network].filter(Boolean).length;
+    return signals >= 2;
   }catch(e){
     return false;
   }
