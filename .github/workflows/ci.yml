@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependências
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Testes (pytest)
+        run: pytest tests/ -v
+
+      - name: Auditoria de dependências (pip-audit)
+        run: pip-audit -r requirements.txt
+        continue-on-error: true # não bloqueia o merge, mas fica visível no log do PR
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bloquear commit de arquivos .db / .env
+        run: |
+          if git ls-files | grep -E '\.(db|sqlite3?)$|^\.env$'; then
+            echo "::error::Arquivo de banco de dados ou .env encontrado no repositório — remova antes de mergear."
+            exit 1
+          fi
+          echo "OK — nenhum .db/.env versionado."

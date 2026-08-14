@@ -1,0 +1,26 @@
+{
+  "builds": [
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "admin.html", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/admin", "dest": "/admin.html" },
+    { "src": "/admin.html", "dest": "/admin.html" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "geolocation=(), microphone=(), camera=()" },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' js.hcaptcha.com *.hcaptcha.com www.highperformanceformat.com acceptable.a-ads.com cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; frame-src *.hcaptcha.com acceptable.a-ads.com *.a-ads.com; connect-src 'self' *.hcaptcha.com https://nanofaucet-ko6i.onrender.com https://*.supabase.co; img-src 'self' data: *.hcaptcha.com; font-src 'self'"
+        }
+      ]
+    }
+  ]
+}

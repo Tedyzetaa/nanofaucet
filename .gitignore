@@ -1,0 +1,23 @@
+# ambiente / segredos
+.env
+.env.*
+!.env.example
+
+# banco local
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store

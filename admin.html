@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NANOFAUCET :: admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#05070a;
+    --bg-panel:#0b0f14;
+    --bg-panel-2:#0e1420;
+    --line:#152018;
+    --green:#00ff9c;
+    --green-dim:#0a5c42;
+    --amber:#ffb000;
+    --red:#ff3860;
+    --text:#d7f5e6;
+    --text-dim:#5f8a76;
+    --mono-display:'JetBrains Mono',monospace;
+    --mono-body:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--mono-body);
+    min-height:100vh;
+  }
+  a{color:var(--green);}
+  header{
+    border-bottom:1px solid var(--line);padding:18px 24px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  header h1{font-family:var(--mono-display);font-size:16px;letter-spacing:.04em;}
+  header h1 .accent{color:var(--green);text-shadow:0 0 18px rgba(0,255,156,.45);}
+  #whoami{font-size:12px;color:var(--text-dim);}
+  main{max-width:960px;margin:0 auto;padding:32px 20px 80px;}
+
+  #login-view{max-width:360px;margin:80px auto 0;}
+  .panel{border:1px solid var(--line);background:var(--bg-panel);border-radius:8px;padding:26px;margin-bottom:24px;}
+  .panel h2{font-family:var(--mono-display);font-size:14px;margin-bottom:16px;letter-spacing:.03em;}
+  .panel h2::before{content:'$';color:var(--green);margin-right:6px;}
+
+  label{display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em;}
+  input[type=email],input[type=password],input[type=text]{
+    width:100%;background:#04140d;border:1px solid var(--green-dim);color:var(--green);
+    font-family:var(--mono-body);font-size:14px;padding:10px 12px;border-radius:6px;margin-bottom:14px;
+    outline:none;
+  }
+  input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(0,255,156,.12);}
+  button{
+    background:var(--green);color:#03110a;border:none;border-radius:6px;
+    font-family:var(--mono-display);font-weight:700;font-size:13px;letter-spacing:.03em;
+    padding:11px 16px;cursor:pointer;
+  }
+  button:hover{filter:brightness(1.08);}
+  button.secondary{background:transparent;border:1px solid var(--line);color:var(--text);}
+  button.danger{background:var(--red);color:#1a0509;}
+  button:disabled{opacity:.5;cursor:not-allowed;}
+
+  #msg{font-size:13px;margin-top:10px;min-height:18px;}
+  #msg.ok{color:var(--green);}
+  #msg.err{color:var(--red);}
+
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:160px;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);}
+  th{color:var(--text-dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
+  td.mono{font-family:var(--mono-display);}
+  td.amber{color:var(--amber);}
+  .empty{color:var(--text-dim);font-size:13px;padding:12px 0;}
+
+  #app-view{display:none;}
+  .tag{display:inline-block;background:rgba(0,255,156,.1);color:var(--green);border:1px solid var(--green-dim);
+    border-radius:4px;padding:2px 8px;font-size:11px;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NANO<span class="accent">FAUCET</span> :: admin</h1>
+  <div id="whoami"></div>
+</header>
+
+<main>
+
+  <!-- ---------- tela de login ---------- -->
+  <div id="login-view">
+    <div class="panel">
+      <h2>login</h2>
+      <label for="email">e-mail</label>
+      <input type="email" id="email" autocomplete="username" placeholder="admin@nanofaucet.io">
+      <label for="password">senha</label>
+      <input type="password" id="password" autocomplete="current-password" placeholder="••••••••">
+      <button id="btn-login">entrar</button>
+      <div id="msg"></div>
+    </div>
+  </div>
+
+  <!-- ---------- painel autenticado ---------- -->
+  <div id="app-view">
+
+    <div class="panel">
+      <h2>configuração ativa</h2>
+      <div id="config-box" class="empty">carregando…</div>
+    </div>
+
+    <div class="panel">
+      <h2>bloquear wallet / ip</h2>
+      <div class="row">
+        <div>
+          <label for="block-id">identificador</label>
+          <input type="text" id="block-id" placeholder="wallet@mail.com ou 1.2.3.4">
+        </div>
+        <div>
+          <label for="block-reason">motivo</label>
+          <input type="text" id="block-reason" placeholder="opcional">
+        </div>
+        <button id="btn-block">bloquear</button>
+      </div>
+      <div id="block-msg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>blocklist atual</h2>
+      <div id="blocklist-box" class="empty">carregando…</div>
+    </div>
+
+    <div class="panel">
+      <h2>claims recentes</h2>
+      <div id="claims-box" class="empty">carregando…</div>
+    </div>
+
+    <button class="secondary" id="btn-logout">sair</button>
+  </div>
+
+</main>
+
+<script>
+// ---------------- config ----------------
+// Ajuste estes dois valores pro seu projeto Supabase (Project Settings → API).
+// A anon key NÃO é secreta — ela só autentica login, nunca acessa dados
+// diretamente (isso passa sempre pelo backend FastAPI com o JWT no header).
+const SUPABASE_URL = "https://SEU-PROJETO.supabase.co";
+const SUPABASE_ANON_KEY = "SUA-ANON-KEY-AQUI";
+
+// Base da API do backend (Render). Em produção, ajuste pro domínio real.
+const API_BASE = (location.hostname === "localhost" || location.hostname === "127.0.0.1")
+  ? "http://127.0.0.1:8000"
+  : "https://nanofaucet-ko6i.onrender.com";
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// access_token fica só em memória — nunca em localStorage. Se a aba fechar,
+// é preciso logar de novo (aceitável pra um painel admin de baixo volume).
+let accessToken = null;
+
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(str) {
+  // Evita XSS ao injetar dados vindos da API (wallet, reason, mensagens de
+  // erro) via innerHTML — mesmo sendo dados que hoje passam por validação
+  // no backend, escapar aqui é defesa em profundidade e custa nada.
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function showMsg(el, text, ok) {
+  el.textContent = text;
+  el.className = ok ? "ok" : "err";
+}
+
+async function apiFetch(path, opts = {}) {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${accessToken}`,
+      ...(opts.headers || {}),
+    },
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.detail || `erro ${resp.status}`);
+  }
+  return resp.status === 204 ? null : resp.json();
+}
+
+function enterApp(email) {
+  $("login-view").style.display = "none";
+  $("app-view").style.display = "block";
+  $("whoami").textContent = email;
+  loadConfig();
+  loadBlocklist();
+  loadClaims();
+}
+
+function exitApp() {
+  accessToken = null;
+  $("login-view").style.display = "block";
+  $("app-view").style.display = "none";
+  $("whoami").textContent = "";
+}
+
+$("btn-login").addEventListener("click", async () => {
+  const email = $("email").value.trim();
+  const password = $("password").value;
+  const msg = $("msg");
+  showMsg(msg, "autenticando…", true);
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    showMsg(msg, error.message, false);
+    return;
+  }
+  accessToken = data.session.access_token;
+  try {
+    // valida que o usuário logado é de fato admin (403 do backend se não for)
+    await apiFetch("/admin/config");
+    showMsg(msg, "", true);
+    enterApp(email);
+  } catch (e) {
+    accessToken = null;
+    await supabase.auth.signOut();
+    showMsg(msg, `login ok, mas sem permissão de admin: ${e.message}`, false);
+  }
+});
+
+$("btn-logout").addEventListener("click", async () => {
+  await supabase.auth.signOut();
+  exitApp();
+});
+
+async function loadConfig() {
+  const box = $("config-box");
+  try {
+    const cfg = await apiFetch("/admin/config");
+    box.innerHTML = `
+      <table>
+        <tr><th>claim</th><td class="mono amber">${cfg.claim_amount} ${cfg.faucetpay_currency}</td></tr>
+        <tr><th>cooldown (wallet)</th><td class="mono">${cfg.cooldown_seconds}s</td></tr>
+        <tr><th>cooldown (ip)</th><td class="mono">${cfg.ip_cooldown_seconds}s</td></tr>
+        <tr><th>limite diário/ip</th><td class="mono">${cfg.max_claims_per_ip_per_day}</td></tr>
+        <tr><th>modo</th><td>${cfg.dry_run ? '<span class="tag">dry_run</span>' : '<span class="tag" style="color:var(--red);border-color:var(--red)">produção</span>'}</td></tr>
+      </table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">erro ao carregar: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadBlocklist() {
+  const box = $("blocklist-box");
+  try {
+    const rows = await apiFetch("/admin/blocklist");
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">nenhum bloqueio ativo</div>`;
+      return;
+    }
+    box.innerHTML = `
+      <table>
+        <thead><tr><th>identificador</th><th>motivo</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td class="mono">${escapeHtml(r.identifier)}</td>
+              <td>${escapeHtml(r.reason) || "—"}</td>
+              <td><button class="danger" data-id="${escapeHtml(r.identifier)}">remover</button></td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    box.querySelectorAll("button.danger").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await apiFetch(`/admin/blocklist/${encodeURIComponent(btn.dataset.id)}`, { method: "DELETE" });
+          loadBlocklist();
+        } catch (e) {
+          alert(e.message);
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="empty">erro ao carregar: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadClaims() {
+  const box = $("claims-box");
+  try {
+    const rows = await apiFetch("/admin/claims?limit=50");
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">nenhum claim registrado ainda</div>`;
+      return;
+    }
+    const statusTag = (s) => {
+      const cls = s === "paid" ? "" : s === "pending" ? 'style="color:var(--amber);border-color:var(--amber)"' : 'style="color:var(--red);border-color:var(--red)"';
+      return `<span class="tag" ${cls}>${escapeHtml(s || "paid")}</span>`;
+    };
+    box.innerHTML = `
+      <table>
+        <thead><tr><th>wallet</th><th>ip</th><th>valor</th><th>status</th><th>quando</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td class="mono">${escapeHtml(r.wallet)}</td>
+              <td class="mono">${escapeHtml(r.ip)}</td>
+              <td class="amber">${escapeHtml(r.amount)}</td>
+              <td>${statusTag(r.status)}</td>
+              <td>${new Date(r.created_at * 1000).toLocaleString("pt-BR")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">erro ao carregar: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+$("btn-block").addEventListener("click", async () => {
+  const identifier = $("block-id").value.trim();
+  const reason = $("block-reason").value.trim();
+  const msg = $("block-msg");
+  if (!identifier) {
+    showMsg(msg, "informe um identificador", false);
+    return;
+  }
+  try {
+    await apiFetch("/admin/blocklist", {
+      method: "POST",
+      body: JSON.stringify({ identifier, reason }),
+    });
+    $("block-id").value = "";
+    $("block-reason").value = "";
+    showMsg(msg, "bloqueado", true);
+    loadBlocklist();
+  } catch (e) {
+    showMsg(msg, e.message, false);
+  }
+});
+
+// se a sessão do supabase já existir (ex: refresh da página dentro da mesma
+// aba/memória JS), tenta restaurar — mas como não persistimos em storage,
+// isso só acontece dentro da mesma navegação SPA, nunca após fechar a aba.
+supabase.auth.getSession().then(({ data }) => {
+  if (data.session) {
+    accessToken = data.session.access_token;
+    enterApp(data.session.user.email);
+  }
+});
+</script>
+
+</body>
+</html>
