@@ -18,7 +18,7 @@
         { "key": "Permissions-Policy", "value": "geolocation=(), microphone=(), camera=()" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' js.hcaptcha.com *.hcaptcha.com www.highperformanceformat.com acceptable.a-ads.com cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; frame-src *.hcaptcha.com acceptable.a-ads.com *.a-ads.com; connect-src 'self' *.hcaptcha.com https://nanofaucet-ko6i.onrender.com https://*.supabase.co; img-src 'self' data: *.hcaptcha.com; font-src 'self'"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' js.hcaptcha.com *.hcaptcha.com www.highperformanceformat.com *.highperformanceformat.com *.effectivecpmnetwork.com acceptable.a-ads.com cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; frame-src *.hcaptcha.com acceptable.a-ads.com *.a-ads.com *.highperformanceformat.com *.effectivecpmnetwork.com; connect-src 'self' *.hcaptcha.com https://nanofaucet-ko6i.onrender.com https://*.supabase.co; img-src 'self' data: *.hcaptcha.com *.highperformanceformat.com *.effectivecpmnetwork.com; font-src 'self'"
         }
       ]
     }
