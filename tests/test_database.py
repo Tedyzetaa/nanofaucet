@@ -104,6 +104,73 @@ async def test_outbox_pending_then_failed_not_counted_in_stats():
     assert stats["total_paid_24h"] >= 0
 
 
+@pytest.mark.asyncio
+async def test_balance_and_withdrawal_flow():
+    wallet = f"{uuid.uuid4()}@example.com"
+    user_id = str(uuid.uuid4())
+
+    # sem claims ainda -> saldo zerado
+    balance = await db.get_balance(wallet)
+    assert balance["available"] == 0
+
+    # credita 3 claims de 0.0001 cada (mesmo caminho que /claim usa: create + mark paid)
+    for _ in range(3):
+        claim_id = await db.create_pending_claim(wallet, "1.2.3.4", 0.0001)
+        await db.mark_claim_paid(claim_id)
+
+    balance = await db.get_balance(wallet)
+    assert balance["total_credited"] == pytest.approx(0.0003)
+    assert balance["available"] == pytest.approx(0.0003)
+
+    # pedir saque maior que o saldo -> None (recusado atomicamente)
+    refused = await db.create_withdrawal(user_id, wallet, 1.0)
+    assert refused is None
+
+    # pedido dentro do saldo -> aceito, e reduz o disponível
+    withdrawal_id = await db.create_withdrawal(user_id, wallet, 0.0002)
+    assert withdrawal_id is not None
+    balance = await db.get_balance(wallet)
+    assert balance["available"] == pytest.approx(0.0001)
+    assert balance["pending_withdrawals"] == pytest.approx(0.0002)
+
+    # aprovar (marcar pago) -> some do saldo pendente, entra em total_withdrawn
+    ok = await db.mark_withdrawal_paid(withdrawal_id, payout_ref="abc")
+    assert ok is True
+    # segunda tentativa de marcar como pago não deve reprocessar
+    assert await db.mark_withdrawal_paid(withdrawal_id, payout_ref="abc") is False
+
+    balance = await db.get_balance(wallet)
+    assert balance["total_withdrawn"] == pytest.approx(0.0002)
+    assert balance["pending_withdrawals"] == 0
+    assert balance["available"] == pytest.approx(0.0001)
+
+
+@pytest.mark.asyncio
+async def test_rejected_withdrawal_returns_balance():
+    wallet = f"{uuid.uuid4()}@example.com"
+    user_id = str(uuid.uuid4())
+    claim_id = await db.create_pending_claim(wallet, "1.2.3.4", 0.001)
+    await db.mark_claim_paid(claim_id)
+
+    withdrawal_id = await db.create_withdrawal(user_id, wallet, 0.001)
+    assert (await db.get_balance(wallet))["available"] == 0
+
+    assert await db.mark_withdrawal_rejected(withdrawal_id, reason="wallet inválida") is True
+    assert (await db.get_balance(wallet))["available"] == pytest.approx(0.001)
+
+
+@pytest.mark.asyncio
+async def test_set_user_wallet_rejects_duplicate():
+    wallet = f"{uuid.uuid4()}@example.com"
+    user_a, user_b = str(uuid.uuid4()), str(uuid.uuid4())
+
+    await db.set_user_wallet(user_a, wallet)
+    assert await db.get_user_wallet(user_a) == wallet
+
+    with pytest.raises(ValueError):
+        await db.set_user_wallet(user_b, wallet)
+
+
 def test_mask_wallet_email():
     assert db.mask_wallet("teste@example.com") == "t***@example.com"
 

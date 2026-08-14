@@ -112,6 +112,16 @@
     </div>
 
     <div class="panel">
+      <h2>saques pendentes</h2>
+      <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
+        Aprovar dispara o pagamento real via FaucetPay (ou simulado, em <code>DRY_RUN</code>) e marca o saque
+        como pago. Rejeitar devolve o valor ao saldo do usuário sem pagar nada. O usuário vê o aviso de
+        que saques são processados em até 24h.
+      </p>
+      <div id="withdrawals-box" class="empty">carregando…</div>
+    </div>
+
+    <div class="panel">
       <h2>bloquear wallet / ip</h2>
       <div class="row">
         <div>
@@ -198,6 +208,7 @@ function enterApp(email) {
   $("app-view").style.display = "block";
   $("whoami").textContent = email;
   loadConfig();
+  loadWithdrawals();
   loadBlocklist();
   loadClaims();
 }
@@ -247,8 +258,69 @@ async function loadConfig() {
         <tr><th>cooldown (wallet)</th><td class="mono">${cfg.cooldown_seconds}s</td></tr>
         <tr><th>cooldown (ip)</th><td class="mono">${cfg.ip_cooldown_seconds}s</td></tr>
         <tr><th>limite diário/ip</th><td class="mono">${cfg.max_claims_per_ip_per_day}</td></tr>
+        <tr><th>saque mínimo</th><td class="mono amber">${cfg.min_withdrawal_amount} ${cfg.faucetpay_currency}</td></tr>
         <tr><th>modo</th><td>${cfg.dry_run ? '<span class="tag">dry_run</span>' : '<span class="tag" style="color:var(--red);border-color:var(--red)">produção</span>'}</td></tr>
       </table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">erro ao carregar: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadWithdrawals() {
+  const box = $("withdrawals-box");
+  try {
+    const rows = await apiFetch("/admin/withdrawals?status=pending&limit=100");
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">nenhum saque pendente</div>`;
+      return;
+    }
+    box.innerHTML = `
+      <table>
+        <thead><tr><th>wallet</th><th>valor</th><th>solicitado</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr data-row-id="${r.id}">
+              <td class="mono">${escapeHtml(r.wallet)}</td>
+              <td class="amber">${escapeHtml(r.amount)}</td>
+              <td>${new Date(r.created_at * 1000).toLocaleString("pt-BR")}</td>
+              <td style="display:flex;gap:6px;">
+                <button data-action="approve" data-id="${r.id}">pagar</button>
+                <button class="danger" data-action="reject" data-id="${r.id}">rejeitar</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+      <div id="withdrawals-msg" style="margin-top:10px;"></div>`;
+
+    box.querySelectorAll("button[data-action='approve']").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Confirmar pagamento deste saque? Isso dispara o payout via FaucetPay.")) return;
+        btn.disabled = true;
+        try {
+          await apiFetch(`/admin/withdrawals/${btn.dataset.id}/approve`, { method: "POST" });
+          loadWithdrawals();
+        } catch (e) {
+          alert(e.message);
+          btn.disabled = false;
+        }
+      });
+    });
+    box.querySelectorAll("button[data-action='reject']").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const reason = prompt("Motivo da rejeição (opcional):") || "";
+        btn.disabled = true;
+        try {
+          await apiFetch(`/admin/withdrawals/${btn.dataset.id}/reject`, {
+            method: "POST",
+            body: JSON.stringify({ reason }),
+          });
+          loadWithdrawals();
+        } catch (e) {
+          alert(e.message);
+          btn.disabled = false;
+        }
+      });
+    });
   } catch (e) {
     box.innerHTML = `<div class="empty">erro ao carregar: ${escapeHtml(e.message)}</div>`;
   }

@@ -31,6 +31,7 @@ import os
 import time
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///faucet.db")
@@ -153,6 +154,74 @@ async def init_db():
                     created_at INTEGER NOT NULL
                 )
             """))
+
+        # Fase 3 — conta do usuário final (dashboard: saldo, saque, histórico).
+        # Supabase Auth cuida de auth.users; aqui só guardamos a wallet que o
+        # usuário vinculou à própria conta (é contra essa wallet que batemos
+        # os claims dele pra calcular o saldo). Em produção este schema
+        # também é criado por `supabase/002_user_profiles.sql` (que também
+        # adiciona a RLS) — o CREATE TABLE aqui é idempotente e só garante
+        # que o dev local em SQLite funcione sem depender do Supabase.
+        if not _is_sqlite:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+                    wallet TEXT UNIQUE,
+                    referral_code TEXT UNIQUE,
+                    referred_by uuid REFERENCES user_profiles(user_id),
+                    streak_count INT NOT NULL DEFAULT 0,
+                    last_claim_day DATE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """))
+        else:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    user_id TEXT PRIMARY KEY,
+                    wallet TEXT UNIQUE,
+                    referral_code TEXT UNIQUE,
+                    referred_by TEXT,
+                    streak_count INTEGER NOT NULL DEFAULT 0,
+                    last_claim_day TEXT,
+                    created_at INTEGER NOT NULL
+                )
+            """))
+
+        # Fase 3 — saques. Cada linha é um pedido do usuário; fica 'pending'
+        # até o admin aprovar (dispara o payout real via FaucetPay,
+        # `payouts.send_payout`) ou rejeitar (devolve o valor ao saldo
+        # disponível, já que o cálculo de saldo exclui 'rejected').
+        if _is_sqlite:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS withdrawals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    wallet TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    payout_ref TEXT,
+                    admin_note TEXT,
+                    created_at INTEGER NOT NULL,
+                    processed_at INTEGER
+                )
+            """))
+        else:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS withdrawals (
+                    id SERIAL PRIMARY KEY,
+                    user_id uuid NOT NULL,
+                    wallet TEXT NOT NULL,
+                    amount DOUBLE PRECISION NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    payout_ref TEXT,
+                    admin_note TEXT,
+                    created_at BIGINT NOT NULL,
+                    processed_at BIGINT
+                )
+            """))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_withdrawals_wallet ON withdrawals(wallet)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_id)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status)"))
 
 
 async def try_acquire_slot(scope: str, identifier: str, cooldown_seconds: int, now: int | None = None):
@@ -359,3 +428,209 @@ async def is_admin(user_id: str) -> bool:
             {"user_id": user_id},
         )).fetchone()
         return row is not None
+
+
+# ---------------- Fase 3 — conta do usuário, saldo e saques ----------------
+
+async def get_user_wallet(user_id: str) -> str | None:
+    async with async_session() as session:
+        row = (await session.execute(
+            text("SELECT wallet FROM user_profiles WHERE user_id = :user_id"),
+            {"user_id": user_id},
+        )).fetchone()
+        return row[0] if row else None
+
+
+async def set_user_wallet(user_id: str, wallet: str) -> None:
+    """Cria/atualiza a linha do usuário em `user_profiles` com a wallet
+    vinculada à conta (é contra essa wallet que os claims dele são somados
+    pra calcular o saldo). Lança ValueError se a wallet já estiver vinculada
+    a OUTRA conta (constraint UNIQUE em `wallet`)."""
+    now = int(time.time())
+    async with async_session() as session:
+        async with session.begin():
+            try:
+                if _is_sqlite:
+                    await session.execute(
+                        text("""
+                            INSERT INTO user_profiles (user_id, wallet, created_at)
+                            VALUES (:user_id, :wallet, :created_at)
+                            ON CONFLICT (user_id) DO UPDATE SET wallet = :wallet
+                        """),
+                        {"user_id": user_id, "wallet": wallet, "created_at": now},
+                    )
+                else:
+                    await session.execute(
+                        text("""
+                            INSERT INTO user_profiles (user_id, wallet, created_at)
+                            VALUES (:user_id, :wallet, now())
+                            ON CONFLICT (user_id) DO UPDATE SET wallet = :wallet
+                        """),
+                        {"user_id": user_id, "wallet": wallet},
+                    )
+            except IntegrityError:
+                raise ValueError("Essa wallet já está vinculada a outra conta")
+
+
+async def get_balance(wallet: str) -> dict:
+    """Saldo = total creditado por claims 'paid' menos saques que já
+    consomem saldo (pending + paid; 'rejected' não conta, o valor volta
+    a ficar disponível automaticamente)."""
+    async with async_session() as session:
+        total_credited = (await session.execute(
+            text("SELECT COALESCE(SUM(amount),0) FROM claims WHERE wallet = :wallet AND status = 'paid'"),
+            {"wallet": wallet},
+        )).fetchone()[0]
+        total_withdrawn = (await session.execute(
+            text("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE wallet = :wallet AND status = 'paid'"),
+            {"wallet": wallet},
+        )).fetchone()[0]
+        pending_withdrawals = (await session.execute(
+            text("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE wallet = :wallet AND status = 'pending'"),
+            {"wallet": wallet},
+        )).fetchone()[0]
+    available = total_credited - total_withdrawn - pending_withdrawals
+    return {
+        "total_credited": round(total_credited, 8),
+        "total_withdrawn": round(total_withdrawn, 8),
+        "pending_withdrawals": round(pending_withdrawals, 8),
+        "available": round(max(0.0, available), 8),
+    }
+
+
+async def create_withdrawal(user_id: str, wallet: str, amount: float) -> int | None:
+    """Cria o pedido de saque de forma atômica: o INSERT só acontece se o
+    saldo disponível (calculado dentro do mesmo statement) cobrir o valor
+    pedido. Retorna o id criado, ou None se o saldo era insuficiente.
+
+    Nota de concorrência: a checagem de saldo roda dentro do próprio
+    INSERT (mesmo statement), então é atômica contra escritas já
+    commitadas — mas duas requisições de saque verdadeiramente simultâneas
+    do mesmo usuário ainda podem, em tese, ler o mesmo saldo antes de
+    qualquer uma commitar (mesmo limite "best-effort" já documentado em
+    `count_ip_claims_since`). Risco baixo aqui: é o próprio usuário pedindo
+    saque da própria conta, não uma corrida entre partes adversárias."""
+    now = int(time.time())
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                text("""
+                    INSERT INTO withdrawals (user_id, wallet, amount, status, created_at)
+                    SELECT :user_id, :wallet, :amount, 'pending', :created_at
+                    WHERE (
+                        (SELECT COALESCE(SUM(amount),0) FROM claims WHERE wallet = :wallet AND status = 'paid')
+                        - (SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE wallet = :wallet AND status IN ('pending','paid'))
+                    ) >= :amount
+                """ + ("" if _is_sqlite else " RETURNING id")),
+                {"user_id": user_id, "wallet": wallet, "amount": amount, "created_at": now},
+            )
+            if result.rowcount != 1:
+                return None
+            if _is_sqlite:
+                row = (await session.execute(text("SELECT last_insert_rowid()"))).fetchone()
+                return row[0]
+            return result.fetchone()[0]
+
+
+async def get_withdrawal(withdrawal_id: int) -> dict | None:
+    async with async_session() as session:
+        row = (await session.execute(
+            text("""
+                SELECT id, user_id, wallet, amount, status, payout_ref, admin_note, created_at, processed_at
+                FROM withdrawals WHERE id = :id
+            """),
+            {"id": withdrawal_id},
+        )).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "user_id": row[1], "wallet": row[2], "amount": row[3],
+            "status": row[4], "payout_ref": row[5], "admin_note": row[6],
+            "created_at": row[7], "processed_at": row[8],
+        }
+
+
+async def mark_withdrawal_paid(withdrawal_id: int, payout_ref: str | None = None) -> bool:
+    """Marca como pago SÓ SE ainda estiver 'pending' (evita pagar duas vezes
+    o mesmo saque em cliques duplicados/concorrentes). Retorna se atualizou."""
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                text("""
+                    UPDATE withdrawals SET status = 'paid', payout_ref = :ref, processed_at = :now
+                    WHERE id = :id AND status = 'pending'
+                """),
+                {"id": withdrawal_id, "ref": payout_ref, "now": int(time.time())},
+            )
+            return result.rowcount == 1
+
+
+async def mark_withdrawal_rejected(withdrawal_id: int, reason: str = "") -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                text("""
+                    UPDATE withdrawals SET status = 'rejected', admin_note = :reason, processed_at = :now
+                    WHERE id = :id AND status = 'pending'
+                """),
+                {"id": withdrawal_id, "reason": reason[:280] if reason else None, "now": int(time.time())},
+            )
+            return result.rowcount == 1
+
+
+async def list_user_claims(wallet: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Histórico de ganhos (claims creditados) de uma wallet — usado no
+    dashboard do usuário."""
+    async with async_session() as session:
+        rows = (await session.execute(
+            text("""
+                SELECT id, amount, created_at, status FROM claims
+                WHERE wallet = :wallet
+                ORDER BY created_at DESC LIMIT :limit OFFSET :offset
+            """),
+            {"wallet": wallet, "limit": limit, "offset": offset},
+        )).fetchall()
+        return [{"id": r[0], "amount": r[1], "created_at": r[2], "status": r[3]} for r in rows]
+
+
+async def list_user_withdrawals(user_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    async with async_session() as session:
+        rows = (await session.execute(
+            text("""
+                SELECT id, wallet, amount, status, payout_ref, admin_note, created_at, processed_at
+                FROM withdrawals WHERE user_id = :user_id
+                ORDER BY created_at DESC LIMIT :limit OFFSET :offset
+            """),
+            {"user_id": user_id, "limit": limit, "offset": offset},
+        )).fetchall()
+        return [
+            {
+                "id": r[0], "wallet": r[1], "amount": r[2], "status": r[3],
+                "payout_ref": r[4], "admin_note": r[5], "created_at": r[6], "processed_at": r[7],
+            }
+            for r in rows
+        ]
+
+
+async def list_withdrawals(limit: int = 50, offset: int = 0, status: str | None = None) -> list[dict]:
+    """Usado pelo painel admin — todos os saques, opcionalmente filtrados por status."""
+    query = """
+        SELECT id, user_id, wallet, amount, status, payout_ref, admin_note, created_at, processed_at
+        FROM withdrawals
+        {where}
+        ORDER BY created_at DESC LIMIT :limit OFFSET :offset
+    """
+    params = {"limit": limit, "offset": offset}
+    where = ""
+    if status:
+        where = "WHERE status = :status"
+        params["status"] = status
+    async with async_session() as session:
+        rows = (await session.execute(text(query.format(where=where)), params)).fetchall()
+        return [
+            {
+                "id": r[0], "user_id": r[1], "wallet": r[2], "amount": r[3], "status": r[4],
+                "payout_ref": r[5], "admin_note": r[6], "created_at": r[7], "processed_at": r[8],
+            }
+            for r in rows
+        ]

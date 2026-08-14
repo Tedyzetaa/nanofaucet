@@ -2,9 +2,16 @@
 NANOFAUCET backend — FastAPI
 
 Endpoints:
-  POST /claim   -> valida wallet, captcha, cooldown (wallet+IP) e anti-fraude, paga via FaucetPay, registra
+  POST /claim   -> valida wallet, captcha, cooldown (wallet+IP) e anti-fraude, credita saldo, registra
   GET  /stats   -> estatísticas públicas (total pago 24h, resgates hoje, carteiras únicas)
   GET  /health  -> healthcheck para o Render
+  /admin/*      -> painel admin (admin.py)
+  /me/*         -> dashboard do usuário: saldo, saque, histórico (user.py)
+
+Fase 3 (saldo + saque): claim NÃO paga mais de forma automática via
+FaucetPay — ele só credita saldo. O pagamento de verdade só acontece quando
+o usuário pede saque (/me/withdraw) e o admin aprova
+(/admin/withdrawals/{id}/approve), que dispara o payout (`payouts.py`).
 
 Rode local:
   pip install -r requirements.txt
@@ -25,6 +32,7 @@ from pydantic import BaseModel, field_validator, Field
 
 import database as db
 from admin import router as admin_router
+from user import router as user_router
 
 # ---------------- logging ----------------
 logging.basicConfig(
@@ -39,14 +47,10 @@ COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "60"))     # tempo entre re
 IP_COOLDOWN_SECONDS = int(os.getenv("IP_COOLDOWN_SECONDS", "5"))  # tempo mínimo entre requisições do mesmo IP
 MAX_CLAIMS_PER_IP_PER_DAY = int(os.getenv("MAX_CLAIMS_PER_IP_PER_DAY", "50"))
 
-FAUCETPAY_API_KEY = os.getenv("FAUCETPAY_API_KEY", "")
-FAUCETPAY_CURRENCY = os.getenv("FAUCETPAY_CURRENCY", "MATIC")
-FAUCETPAY_URL = "https://faucetpay.io/api/v1/send"
+FAUCETPAY_CURRENCY = os.getenv("FAUCETPAY_CURRENCY", "MATIC")  # só pra exibir na resposta do /claim
 
 HCAPTCHA_SECRET = os.getenv("HCAPTCHA_SECRET", "")
 HCAPTCHA_VERIFY_URL = "https://hcaptcha.com/siteverify"
-
-DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"  # true = não paga de verdade, só simula
 
 # "production" trava comportamentos fail-open que fazem sentido em dev mas
 # são perigosos em produção (captcha aceito sem verificação, docs expostos).
@@ -101,6 +105,7 @@ app.add_middleware(
 )
 
 app.include_router(admin_router, prefix="/admin")
+app.include_router(user_router, prefix="/me")
 
 
 @app.exception_handler(RequestValidationError)
@@ -157,30 +162,6 @@ async def verify_captcha(token: str, remote_ip: str) -> bool:
         return bool(data.get("success"))
 
 
-async def send_payout(wallet: str, amount: float) -> dict:
-    """Envia o pagamento via API da FaucetPay. Em DRY_RUN, apenas simula."""
-    if DRY_RUN or not FAUCETPAY_API_KEY:
-        return {"status": 200, "message": "dry_run", "payout_id": None}
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            FAUCETPAY_URL,
-            data={
-                "api_key": FAUCETPAY_API_KEY,
-                "amount": amount,
-                "to": wallet,
-                "currency": FAUCETPAY_CURRENCY,
-            },
-        )
-        data = resp.json()
-        if data.get("status") != 200:
-            raise HTTPException(
-                status_code=402,
-                detail=f"Falha no pagamento FaucetPay: {data.get('message', 'erro desconhecido')}",
-            )
-        return data
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -229,36 +210,27 @@ async def claim(payload: ClaimRequest, request: Request):
         await db.release_slot("ip", ip)  # não penaliza o IP por uma tentativa negada no nível de wallet
         raise HTTPException(status_code=429, detail=f"Aguarde {wallet_wait}s para resgatar novamente")
 
-    # PADRÃO OUTBOX: grava o claim como 'pending' ANTES do payout. Se o
-    # processo morrer entre a chamada à FaucetPay e a atualização de status,
-    # sobra um registro 'pending' rastreável (e reconciliável manualmente)
-    # em vez de um pagamento sem nenhum vestígio no banco.
-    claim_id = await db.create_pending_claim(wallet, ip, CLAIM_AMOUNT)
-
+    # Fase 3: claim não paga mais direto via FaucetPay — só credita saldo.
+    # Mantém o mesmo par de funções (create_pending_claim + mark_claim_paid)
+    # do outbox original em vez de um único INSERT, pra não alterar o
+    # comportamento já testado em tests/test_database.py; como não há mais
+    # chamada de rede entre os dois passos, não há mais janela de "pending
+    # preso" nem motivo pra marcar como 'failed' aqui.
     try:
-        payout_result = await send_payout(wallet, CLAIM_AMOUNT)
-    except HTTPException:
-        # pagamento falhou — libera os locks pra não penalizar o usuário por
-        # um erro nosso, e marca o claim como failed (mantém o rastro).
-        await db.release_slot("wallet", wallet)
-        await db.release_slot("ip", ip)
-        await db.mark_claim_failed(claim_id, reason="faucetpay_rejected")
-        raise
+        claim_id = await db.create_pending_claim(wallet, ip, CLAIM_AMOUNT)
+        await db.mark_claim_paid(claim_id, payout_ref=None)
     except Exception:
         await db.release_slot("wallet", wallet)
         await db.release_slot("ip", ip)
-        await db.mark_claim_failed(claim_id, reason="unexpected_error")
-        logger.exception("erro inesperado no payout: wallet=%s claim_id=%s", m_wallet, claim_id)
-        raise HTTPException(status_code=502, detail="Erro ao processar pagamento, tente novamente")
+        logger.exception("erro inesperado ao creditar claim: wallet=%s", m_wallet)
+        raise HTTPException(status_code=500, detail="Erro ao registrar resgate, tente novamente")
 
-    # confirma
-    payout_ref = str(payout_result.get("payout_id")) if isinstance(payout_result, dict) else None
-    await db.mark_claim_paid(claim_id, payout_ref)
-    logger.info("claim ok: wallet=%s ip=%s amount=%s claim_id=%s", m_wallet, m_ip, CLAIM_AMOUNT, claim_id)
+    logger.info("claim creditado: wallet=%s ip=%s amount=%s claim_id=%s", m_wallet, m_ip, CLAIM_AMOUNT, claim_id)
 
     return {
         "status": "ok",
         "amount": CLAIM_AMOUNT,
         "currency": FAUCETPAY_CURRENCY,
         "cooldown_seconds": COOLDOWN_SECONDS,
+        "message": "Resgate creditado ao seu saldo. Vincule sua wallet no dashboard para acompanhar e sacar.",
     }

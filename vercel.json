@@ -1,11 +1,14 @@
 {
   "builds": [
     { "src": "index.html", "use": "@vercel/static" },
-    { "src": "admin.html", "use": "@vercel/static" }
+    { "src": "admin.html", "use": "@vercel/static" },
+    { "src": "dashboard.html", "use": "@vercel/static" }
   ],
   "routes": [
     { "src": "/admin", "dest": "/admin.html" },
     { "src": "/admin.html", "dest": "/admin.html" },
+    { "src": "/dashboard", "dest": "/dashboard.html" },
+    { "src": "/dashboard.html", "dest": "/dashboard.html" },
     { "src": "/(.*)", "dest": "/index.html" }
   ],
   "headers": [

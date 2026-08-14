@@ -24,11 +24,11 @@ import database as db
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 
 
-async def require_admin(authorization: str = Header(None)) -> str:
+def _decode_supabase_jwt(authorization: str | None) -> dict:
+    """Decodifica e valida o JWT do Supabase Auth (compartilhado por
+    require_admin e require_user — a única diferença entre os dois é a
+    checagem extra de `admin_profiles`)."""
     if not SUPABASE_JWT_SECRET:
-        # Falha explícita em vez de aceitar qualquer coisa — ao contrário do
-        # captcha (que tem um modo dev proposital), autenticação de admin
-        # nunca deve "abrir" silenciosamente por falta de configuração.
         raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET não configurado no servidor")
 
     if not authorization or not authorization.startswith("Bearer "):
@@ -36,7 +36,7 @@ async def require_admin(authorization: str = Header(None)) -> str:
 
     token = authorization.removeprefix("Bearer ").strip()
     try:
-        payload = jwt.decode(
+        return jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
             algorithms=["HS256"],
@@ -45,6 +45,24 @@ async def require_admin(authorization: str = Header(None)) -> str:
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Token inválido ou expirado")
 
+
+async def require_user(authorization: str = Header(None)) -> dict:
+    """Exige apenas uma sessão válida do Supabase Auth (conta de usuário
+    comum, criada com e-mail+senha) — ao contrário de `require_admin`, NÃO
+    checa `admin_profiles`. Usado pelas rotas /me/* (dashboard do usuário)."""
+    payload = _decode_supabase_jwt(authorization)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    return {"user_id": user_id, "email": payload.get("email")}
+
+
+async def require_admin(authorization: str = Header(None)) -> str:
+    # Falha explícita em vez de aceitar qualquer coisa — ao contrário do
+    # captcha (que tem um modo dev proposital), autenticação de admin
+    # nunca deve "abrir" silenciosamente por falta de configuração. Essa
+    # checagem já acontece dentro de `_decode_supabase_jwt`.
+    payload = _decode_supabase_jwt(authorization)
     user_id = payload.get("sub")
     if not user_id or not await db.is_admin(user_id):
         raise HTTPException(status_code=403, detail="Sem permissão de admin")

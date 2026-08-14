@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NANOFAUCET :: minha conta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#05070a;
+    --bg-panel:#0b0f14;
+    --bg-panel-2:#0e1420;
+    --line:#152018;
+    --green:#00ff9c;
+    --green-dim:#0a5c42;
+    --amber:#ffb000;
+    --red:#ff3860;
+    --text:#d7f5e6;
+    --text-dim:#5f8a76;
+    --mono-display:'JetBrains Mono',monospace;
+    --mono-body:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--mono-body);
+    min-height:100vh;
+  }
+  a{color:var(--green);}
+  header{
+    border-bottom:1px solid var(--line);padding:18px 24px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  header h1{font-family:var(--mono-display);font-size:16px;letter-spacing:.04em;}
+  header h1 .accent{color:var(--green);text-shadow:0 0 18px rgba(0,255,156,.45);}
+  header a.back{font-size:12px;color:var(--text-dim);text-decoration:none;}
+  header a.back:hover{color:var(--green);}
+  #whoami{font-size:12px;color:var(--text-dim);}
+  main{max-width:760px;margin:0 auto;padding:32px 20px 80px;}
+
+  #login-view{max-width:380px;margin:60px auto 0;}
+  .panel{border:1px solid var(--line);background:var(--bg-panel);border-radius:8px;padding:26px;margin-bottom:24px;}
+  .panel h2{font-family:var(--mono-display);font-size:14px;margin-bottom:16px;letter-spacing:.03em;}
+  .panel h2::before{content:'$';color:var(--green);margin-right:6px;}
+
+  .tabs{display:flex;gap:6px;margin-bottom:18px;}
+  .tabs button{
+    flex:1;background:transparent;border:1px solid var(--line);color:var(--text-dim);
+    font-family:var(--mono-display);font-size:12px;padding:9px;border-radius:6px;cursor:pointer;
+    letter-spacing:.04em;
+  }
+  .tabs button.active{border-color:var(--green);color:var(--green);background:rgba(0,255,156,.08);}
+
+  label{display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em;}
+  input[type=email],input[type=password],input[type=text],input[type=number]{
+    width:100%;background:#04140d;border:1px solid var(--green-dim);color:var(--green);
+    font-family:var(--mono-body);font-size:14px;padding:10px 12px;border-radius:6px;margin-bottom:14px;
+    outline:none;
+  }
+  input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(0,255,156,.12);}
+  input::placeholder{color:#2c5947;}
+  button{
+    background:var(--green);color:#03110a;border:none;border-radius:6px;
+    font-family:var(--mono-display);font-weight:700;font-size:13px;letter-spacing:.03em;
+    padding:11px 16px;cursor:pointer;
+  }
+  button:hover{filter:brightness(1.08);}
+  button.secondary{background:transparent;border:1px solid var(--line);color:var(--text);}
+  button.block{width:100%;}
+  button:disabled{opacity:.5;cursor:not-allowed;}
+
+  #msg,.msg{font-size:13px;margin-top:10px;min-height:18px;}
+  #msg.ok,.msg.ok{color:var(--green);}
+  #msg.err,.msg.err{color:var(--red);}
+
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:160px;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);}
+  th{color:var(--text-dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
+  td.mono{font-family:var(--mono-display);}
+  td.amber{color:var(--amber);}
+  .empty{color:var(--text-dim);font-size:13px;padding:12px 0;}
+
+  #app-view{display:none;}
+  .tag{display:inline-block;background:rgba(0,255,156,.1);color:var(--green);border:1px solid var(--green-dim);
+    border-radius:4px;padding:2px 8px;font-size:11px;}
+
+  .balance-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:6px;}
+  @media (max-width:560px){.balance-grid{grid-template-columns:1fr;}}
+  .balance-card{border:1px solid var(--line);background:var(--bg-panel-2);border-radius:8px;padding:16px;}
+  .balance-card .n{font-family:var(--mono-display);font-size:20px;color:var(--green);word-break:break-all;}
+  .balance-card.pending .n{color:var(--amber);}
+  .balance-card .l{font-size:11px;color:var(--text-dim);margin-top:6px;text-transform:uppercase;letter-spacing:.04em;}
+
+  .hint{font-size:12px;color:var(--text-dim);line-height:1.6;margin-top:10px;}
+  .hint.amber{color:var(--amber);}
+
+  .wallet-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
+  .wallet-line .mono{font-family:var(--mono-display);color:var(--green);font-size:13px;word-break:break-all;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NANO<span class="accent">FAUCET</span> :: minha conta</h1>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <a class="back" href="index.html">← voltar ao faucet</a>
+    <div id="whoami"></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ---------- tela de login/cadastro ---------- -->
+  <div id="login-view">
+    <div class="panel">
+      <div class="tabs">
+        <button id="tab-login" class="active">entrar</button>
+        <button id="tab-signup">criar conta</button>
+      </div>
+
+      <label for="email">e-mail</label>
+      <input type="email" id="email" autocomplete="username" placeholder="voce@exemplo.com">
+      <label for="password">senha</label>
+      <input type="password" id="password" autocomplete="current-password" placeholder="••••••••">
+      <button class="block" id="btn-submit">entrar</button>
+      <div id="msg"></div>
+    </div>
+  </div>
+
+  <!-- ---------- painel autenticado ---------- -->
+  <div id="app-view">
+
+    <div class="panel">
+      <h2>saldo</h2>
+      <div class="balance-grid">
+        <div class="balance-card">
+          <div class="n" id="bal-available">—</div>
+          <div class="l">disponível pra saque</div>
+        </div>
+        <div class="balance-card pending">
+          <div class="n" id="bal-pending">—</div>
+          <div class="l">saques pendentes</div>
+        </div>
+        <div class="balance-card">
+          <div class="n" id="bal-total">—</div>
+          <div class="l">total já ganho</div>
+        </div>
+      </div>
+      <div class="hint" id="min-withdrawal-hint"></div>
+    </div>
+
+    <div class="panel">
+      <h2>wallet vinculada</h2>
+      <div class="wallet-line">
+        <span>atual:</span>
+        <span class="mono" id="current-wallet">nenhuma</span>
+      </div>
+      <label for="wallet-input">wallet FaucetPay / e-mail (a mesma usada pra resgatar)</label>
+      <input type="text" id="wallet-input" placeholder="seuemail@dominio.com ou 0x...">
+      <button id="btn-save-wallet">salvar wallet</button>
+      <div class="msg" id="wallet-msg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>sacar</h2>
+      <p class="hint">Saques são liberados manualmente pelo admin e processados em <strong>até 24 horas</strong> após a solicitação.</p>
+      <div class="row" style="margin-top:14px;">
+        <div>
+          <label for="withdraw-amount">valor (vazio = sacar tudo)</label>
+          <input type="number" id="withdraw-amount" step="any" min="0" placeholder="0.00000000">
+        </div>
+        <button id="btn-withdraw">solicitar saque</button>
+      </div>
+      <div class="msg" id="withdraw-msg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>histórico de ganhos</h2>
+      <div id="claims-box" class="empty">carregando…</div>
+    </div>
+
+    <div class="panel">
+      <h2>histórico de saques</h2>
+      <div id="withdrawals-box" class="empty">carregando…</div>
+    </div>
+
+    <button class="secondary" id="btn-logout">sair</button>
+  </div>
+
+</main>
+
+<script>
+// ---------------- config ----------------
+// Mesmo projeto Supabase usado pelo admin.html — ajuste pro seu projeto
+// (Project Settings → API). A anon key NÃO é secreta.
+const SUPABASE_URL = "https://SEU-PROJETO.supabase.co";
+const SUPABASE_ANON_KEY = "SUA-ANON-KEY-AQUI";
+
+const API_BASE = (location.hostname === "localhost" || location.hostname === "127.0.0.1")
+  ? "http://127.0.0.1:8000"
+  : "https://nanofaucet-ko6i.onrender.com";
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// access_token fica só em memória — nunca em localStorage. Fechar a aba
+// exige logar de novo, igual ao admin.html.
+let accessToken = null;
+let currentProfile = null; // cache de /me/profile (currency, min_withdrawal_amount, wallet)
+let mode = "login"; // "login" | "signup"
+
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function showMsg(el, text, ok) {
+  el.textContent = text;
+  el.className = ok ? "ok" : "err";
+}
+
+async function apiFetch(path, opts = {}) {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${accessToken}`,
+      ...(opts.headers || {}),
+    },
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.detail || `erro ${resp.status}`);
+  }
+  return resp.status === 204 ? null : resp.json();
+}
+
+// ---------------- login / cadastro ----------------
+
+$("tab-login").addEventListener("click", () => {
+  mode = "login";
+  $("tab-login").classList.add("active");
+  $("tab-signup").classList.remove("active");
+  $("btn-submit").textContent = "entrar";
+  $("password").autocomplete = "current-password";
+  $("msg").textContent = "";
+});
+
+$("tab-signup").addEventListener("click", () => {
+  mode = "signup";
+  $("tab-signup").classList.add("active");
+  $("tab-login").classList.remove("active");
+  $("btn-submit").textContent = "criar conta";
+  $("password").autocomplete = "new-password";
+  $("msg").textContent = "";
+});
+
+function enterApp(email) {
+  $("login-view").style.display = "none";
+  $("app-view").style.display = "block";
+  $("whoami").textContent = email;
+  loadProfile();
+  loadBalance();
+  loadClaims();
+  loadWithdrawals();
+}
+
+function exitApp() {
+  accessToken = null;
+  currentProfile = null;
+  $("login-view").style.display = "block";
+  $("app-view").style.display = "none";
+  $("whoami").textContent = "";
+}
+
+$("btn-submit").addEventListener("click", async () => {
+  const email = $("email").value.trim();
+  const password = $("password").value;
+  const msg = $("msg");
+  if (!email || !password) {
+    showMsg(msg, "preencha e-mail e senha", false);
+    return;
+  }
+
+  if (mode === "signup") {
+    showMsg(msg, "criando conta…", true);
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) {
+      showMsg(msg, error.message, false);
+      return;
+    }
+    if (!data.session) {
+      // projeto Supabase com confirmação de e-mail habilitada
+      showMsg(msg, "conta criada — confirme seu e-mail e depois faça login.", true);
+      $("tab-login").click();
+      return;
+    }
+    accessToken = data.session.access_token;
+    showMsg(msg, "", true);
+    enterApp(email);
+    return;
+  }
+
+  showMsg(msg, "autenticando…", true);
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    showMsg(msg, error.message, false);
+    return;
+  }
+  accessToken = data.session.access_token;
+  showMsg(msg, "", true);
+  enterApp(email);
+});
+
+$("btn-logout").addEventListener("click", async () => {
+  await supabase.auth.signOut();
+  exitApp();
+});
+
+// ---------------- dados do dashboard ----------------
+
+async function loadProfile() {
+  try {
+    currentProfile = await apiFetch("/me/profile");
+    $("current-wallet").textContent = currentProfile.wallet || "nenhuma — vincule abaixo";
+    if (currentProfile.wallet) $("wallet-input").value = currentProfile.wallet;
+    $("min-withdrawal-hint").textContent =
+      `saque mínimo: ${currentProfile.min_withdrawal_amount} ${currentProfile.currency}`;
+  } catch (e) {
+    showMsg($("wallet-msg"), e.message, false);
+  }
+}
+
+async function loadBalance() {
+  try {
+    const bal = await apiFetch("/me/balance");
+    $("bal-available").textContent = bal.available;
+    $("bal-pending").textContent = bal.pending_withdrawals;
+    $("bal-total").textContent = bal.total_credited;
+  } catch (e) {
+    // sem wallet vinculada ainda -> /me/balance retorna 400, é esperado
+    $("bal-available").textContent = "0";
+    $("bal-pending").textContent = "0";
+    $("bal-total").textContent = "0";
+  }
+}
+
+$("btn-save-wallet").addEventListener("click", async () => {
+  const wallet = $("wallet-input").value.trim().toLowerCase();
+  const msg = $("wallet-msg");
+  if (!wallet) {
+    showMsg(msg, "informe uma wallet", false);
+    return;
+  }
+  try {
+    await apiFetch("/me/wallet", { method: "PUT", body: JSON.stringify({ wallet }) });
+    showMsg(msg, "wallet salva", true);
+    loadProfile();
+    loadBalance();
+    loadClaims();
+  } catch (e) {
+    showMsg(msg, e.message, false);
+  }
+});
+
+$("btn-withdraw").addEventListener("click", async () => {
+  const raw = $("withdraw-amount").value.trim();
+  const msg = $("withdraw-msg");
+  const body = {};
+  if (raw) body.amount = parseFloat(raw);
+
+  const btn = $("btn-withdraw");
+  btn.disabled = true;
+  try {
+    const res = await apiFetch("/me/withdraw", { method: "POST", body: JSON.stringify(body) });
+    showMsg(msg, res.message, true);
+    $("withdraw-amount").value = "";
+    loadBalance();
+    loadWithdrawals();
+  } catch (e) {
+    showMsg(msg, e.message, false);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function loadClaims() {
+  const box = $("claims-box");
+  try {
+    const rows = await apiFetch("/me/claims?limit=50");
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">nenhum resgate ainda — vincule sua wallet e resgate no faucet</div>`;
+      return;
+    }
+    box.innerHTML = `
+      <table>
+        <thead><tr><th>valor</th><th>status</th><th>quando</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td class="amber">${escapeHtml(r.amount)}</td>
+              <td><span class="tag">${escapeHtml(r.status)}</span></td>
+              <td>${new Date(r.created_at * 1000).toLocaleString("pt-BR")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">erro ao carregar: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadWithdrawals() {
+  const box = $("withdrawals-box");
+  try {
+    const rows = await apiFetch("/me/withdrawals?limit=50");
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">nenhum saque solicitado ainda</div>`;
+      return;
+    }
+    const statusTag = (s) => {
+      const cls = s === "paid" ? "" : s === "pending" ? 'style="color:var(--amber);border-color:var(--amber)"' : 'style="color:var(--red);border-color:var(--red)"';
+      return `<span class="tag" ${cls}>${escapeHtml(s)}</span>`;
+    };
+    box.innerHTML = `
+      <table>
+        <thead><tr><th>valor</th><th>status</th><th>solicitado</th><th>nota</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td class="amber">${escapeHtml(r.amount)}</td>
+              <td>${statusTag(r.status)}</td>
+              <td>${new Date(r.created_at * 1000).toLocaleString("pt-BR")}</td>
+              <td>${escapeHtml(r.admin_note) || "—"}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">erro ao carregar: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// restaura sessão só dentro da mesma navegação SPA (sem persistência em storage)
+supabase.auth.getSession().then(({ data }) => {
+  if (data.session) {
+    accessToken = data.session.access_token;
+    enterApp(data.session.user.email);
+  }
+});
+</script>
+
+</body>
+</html>
